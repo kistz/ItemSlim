@@ -9,7 +9,7 @@ Makes Trackmania 2020 custom items (`.Item.Gbx`) smaller without a visible chang
 Exported items store vertex positions and UVs as full-precision floats. Those values are noisy in their lowest
 bits, so they barely compress. 
 Vertex and triangle counts don't change, and neither do icons, materials or item settings.
-ItemSlim only snaps vertices to fine a fine grid:
+ItemSlim only snaps vertices to a fine grid:
 
 - positions: 1/1024 m, so each vertex moves by at most 0.49 mm (or roughly a grain of salt for the americans)
 - UVs: 1/16384
@@ -61,7 +61,7 @@ Every run, including a dry run, also writes a Markdown report, `<name>_ItemSlim.
 It shows stats from the run.
 
 ## Downloads / Build
-You can download it on the Release page in the repo for windows and liunux x64.
+You can [download it on the Release page](https://github.com/kistz/ItemSlim/releases) in the repo for windows and liunux x64.
 You can also build it yourself with the .NET 10 SDK:
 ```
 dotnet build -c Release
