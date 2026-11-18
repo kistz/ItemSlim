@@ -1,4 +1,9 @@
 # ItemSlim
+> [!IMPORTANT]
+> While i had the idea for this tool because of knowledge how compression algorithms work this project is slopped up.
+> I verified it on multiple sets and gave the code a read for correctness but did not make any changes to the slop machines output.
+> The README is human authored. 
+
 Makes Trackmania 2020 custom items (`.Item.Gbx`) smaller without a visible change.
 
 Exported items store vertex positions and UVs as full-precision floats. Those values are noisy in their lowest
@@ -17,10 +22,6 @@ The files then compress far better. Typical results on [real item packs](https:/
 the item's decompressed content after deflate compression. It approximates how much the item adds to a map that
 uses it, and it is the number that matters for map size limits.
 
-> [!IMPORTANT]
-> While i had the idea for this tool because of knowledge how compression algorithms work this project is slopped up.
-> I verified it on multiple sets and gave the code a read for correctness but did not make any changes to the slop machines output.
-> The README is human authored. 
 
 ## Usage
 
