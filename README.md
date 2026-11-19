@@ -25,6 +25,8 @@ uses it, and it is the number that matters for map size limits.
 
 ## Usage
 
+![](tutorial/ItemSlimTutorial.mp4)
+
 ### Windows
 ```
 ItemSlim "<file or folder>" [options]
