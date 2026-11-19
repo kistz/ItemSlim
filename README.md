@@ -4,7 +4,7 @@
 > I verified it on multiple sets and gave the code a read for correctness but did not make any changes to the slop machines output.
 > The README is human authored. 
 
-Makes Trackmania 2020 custom items (`.Item.Gbx`) smaller without a visible change.
+Makes Trackmania 2020 custom items (`.Item.Gbx`) and maps (`.Map.Gbx`) smaller without a visible change.
 
 Exported items store vertex positions and UVs as full-precision floats. Those values are noisy in their lowest
 bits, so they barely compress. 
