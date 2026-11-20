@@ -16,7 +16,8 @@ ItemSlim - makes Trackmania 2020 items (.Item.Gbx) and the items embedded in map
 Rounds vertex positions to a 1/1024 m grid (max 0.49 mm shift) and UVs to a 1/16384 grid, which lets the files
 compress much better (typically -20 to -25 % file size, -15 % when embedded in maps). Icons, materials and item
 settings are untouched; when the visible mesh is also the collision mesh, collision gets the same sub-millimetre
-rounding. Every item is verified in memory before it is written.
+rounding. The outer edges of the driving surface where the item meets the next block (16 m block boundaries) keep
+their exact positions, so roads still line up seamlessly. Every item is verified in memory before it is written.
 The input is never changed.
 
 Usage:
@@ -31,6 +32,10 @@ the map stays as it is.
 Options:
   --dry-run           only measure what would be gained, write no items
   --quiet             no per-item lines, only the summary
+  --show-protection [blender]
+                      also render every item with its protected driving-surface edges in red, as PNGs in
+                      <name>_protection next to the report. Needs Blender: found automatically (PATH, the usual
+                      install folders, Steam), or give the path to the Blender executable after the option.
 
 A Markdown report (summary table, skipped and failed items, every item) is always written next to the first input,
 as <name>_ItemSlim.md.
@@ -40,7 +45,8 @@ Exit code: 0 = ok, 1 = some items failed verification (copied unchanged), 2 = ba
 const double PosStep = 1.0 / 1024, UvStep = 1.0 / 16384;     // 0.98 mm position grid, 1/16384 UV grid
 
 var inputs = new List<string>();
-bool dryRun = false, quiet = false;
+bool dryRun = false, quiet = false, showProtection = false;
+string? blender = null;
 try
 {
     for (var i = 0; i < args.Length; i++)
@@ -50,6 +56,18 @@ try
             case "-h": case "--help": case "/?": Console.WriteLine(Usage); return 0;
             case "--dry-run": dryRun = true; break;
             case "--quiet": quiet = true; break;
+            case "--show-protection":
+                showProtection = true;
+                // optional Blender path: an existing executable / install folder, or anything named blender*
+                if (i + 1 < args.Length && !args[i + 1].StartsWith("--"))
+                {
+                    var next = args[i + 1];
+                    if (ProtectionView.AsBlender(next) is { } b) { blender = b; i++; }
+                    else if (Path.GetFileName(next.TrimEnd('/', '\\')).StartsWith("blender", StringComparison.OrdinalIgnoreCase)
+                             && !next.EndsWith(".Gbx", StringComparison.OrdinalIgnoreCase))
+                        throw new ArgumentException($"Blender not found at {next}");
+                }
+                break;
             default:
                 if (args[i].StartsWith("--")) throw new ArgumentException($"unknown option {args[i]}");
                 inputs.Add(Path.GetFullPath(args[i])); break;
@@ -57,6 +75,8 @@ try
     }
     if (inputs.Count == 0) { Console.WriteLine(Usage); return 2; }
     foreach (var p in inputs) if (!File.Exists(p) && !Directory.Exists(p)) throw new ArgumentException($"not found: {p}");
+    if (showProtection && (blender ??= ProtectionView.FindBlender()) is null)
+        throw new ArgumentException("--show-protection needs Blender and none was found; give its path: --show-protection \"path/to/blender\"");
 }
 catch (Exception ex) when (ex is ArgumentException or FormatException)
 {
@@ -68,9 +88,10 @@ catch (Exception ex) when (ex is ArgumentException or FormatException)
 var first = inputs[0].TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 var firstName = Directory.Exists(first) ? Path.GetFileName(first) : Path.GetFileName(first).Split('.')[0];
 var reportPath = Path.Combine(Path.GetDirectoryName(first)!, $"{firstName}_ItemSlim.md");
+var protectionDir = Path.Combine(Path.GetDirectoryName(first)!, $"{firstName}_protection");
 
-// work list: (load the item bytes, path shown in the report, report group, store the result)
-var work = new List<(Func<byte[]> Load, string Rel, string Group, Action<byte[], ItemResult> Store)>();
+// work list: (load the item bytes, path shown in the report, report group, store the result, protection image path)
+var work = new List<(Func<byte[]> Load, string Rel, string Group, Action<byte[], ItemResult> Store, string Img)>();
 var maps = new List<MapJob>();
 foreach (var input in inputs)
 {
@@ -92,8 +113,10 @@ foreach (var input in inputs)
         {
             var norm = name.Replace('\\', '/');
             var cut = norm.IndexOf("/Items/", StringComparison.OrdinalIgnoreCase);
-            var shown = mapName + ": " + (cut >= 0 ? norm[(cut + 7)..] : norm);
-            work.Add((() => bytes, shown, mapName, (b, r) => { job.NewBytes[name] = MapJob.UncompressedBody(b); job.Outcomes[name] = r.Outcome; }));
+            var inMap = cut >= 0 ? norm[(cut + 7)..] : norm;
+            var shown = mapName + ": " + inMap;
+            work.Add((() => bytes, shown, mapName, (b, r) => { job.NewBytes[name] = MapJob.UncompressedBody(b); job.Outcomes[name] = r.Outcome; },
+                      Png(Path.Combine(mapName[..^".Map.Gbx".Length], inMap))));
         }
         Console.WriteLine($"Map {mapName}: {itemEntries.Count} embedded items ({job.Entries.Count} embedded files)");
         continue;
@@ -101,7 +124,8 @@ foreach (var input in inputs)
     if (File.Exists(input))
     {
         var dest = OutPath(input);
-        work.Add((() => File.ReadAllBytes(input), Path.GetFileName(input), "(files)", (b, _) => { if (!dryRun) File.WriteAllBytes(dest, b); }));
+        work.Add((() => File.ReadAllBytes(input), Path.GetFileName(input), "(files)", (b, _) => { if (!dryRun) File.WriteAllBytes(dest, b); },
+                  Png(Path.GetFileName(input))));
         continue;
     }
     var root = input.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
@@ -112,8 +136,10 @@ foreach (var input in inputs)
         // one input folder: a row per top-level subfolder; several inputs: a row per input folder
         var group = inputs.Count > 1 ? Path.GetFileName(root) : sep < 0 ? "(top level)" : rel[..sep];
         var dest = Path.Combine(OutPath(input), rel);
-        work.Add((() => File.ReadAllBytes(f), inputs.Count > 1 ? Path.Combine(Path.GetFileName(root), rel) : rel, group,
-                  (b, _) => { if (dryRun) return; Directory.CreateDirectory(Path.GetDirectoryName(dest)!); File.WriteAllBytes(dest, b); }));
+        var shownRel = inputs.Count > 1 ? Path.Combine(Path.GetFileName(root), rel) : rel;
+        work.Add((() => File.ReadAllBytes(f), shownRel, group,
+                  (b, _) => { if (dryRun) return; Directory.CreateDirectory(Path.GetDirectoryName(dest)!); File.WriteAllBytes(dest, b); },
+                  Png(shownRel)));
     }
 }
 if (work.Count == 0) { Console.WriteLine("no items found (no .Item.Gbx files and no items embedded in the maps)"); return 0; }
@@ -144,22 +170,31 @@ if (!dryRun)
     }
 
 var results = new ItemResult[work.Count];
+var scenes = new string?[work.Count];
+var sceneDir = Path.Combine(Path.GetTempPath(), $"ItemSlim_{Environment.ProcessId}_{Guid.NewGuid():N}");
+if (showProtection) Directory.CreateDirectory(sceneDir);
 var done = 0;
 var gate = new object();
 var sw = System.Diagnostics.Stopwatch.StartNew();
 Parallel.For(0, work.Count, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount }, i =>
 {
-    var (load, rel, _, store) = work[i];
+    var (load, rel, _, store, img) = work[i];
     ItemResult r;
     try
     {
         var bytes = load();
         r = Slimmer.Process(rel, bytes, PosStep, UvStep);
         store(r.Output ?? bytes, r);                                      // skipped / already slim / failed: copied as they are
+        if (showProtection && r.Outcome != Outcome.Skipped)
+        {
+            var scene = Path.Combine(sceneDir, $"{i}.json");
+            ProtectionView.WriteScene(bytes, rel, scene, Path.Combine(protectionDir, img));
+            scenes[i] = scene;
+        }
     }
     catch (Exception ex)
     {
-        r = new ItemResult(rel, Outcome.Skipped, $"{ex.GetType().Name}: {ex.Message.ReplaceLineEndings(" ")}", 0, 0, 0, 0, 0, 0, 0, null);
+        r = new ItemResult(rel, Outcome.Skipped, $"{ex.GetType().Name}: {ex.Message.ReplaceLineEndings(" ")}", 0, 0, 0, 0, 0, 0, 0, 0, null);
     }
     results[i] = r with { Output = null };
     lock (gate)
@@ -169,7 +204,7 @@ Parallel.For(0, work.Count, new ParallelOptions { MaxDegreeOfParallelism = Envir
             Console.WriteLine(r.Outcome switch
             {
                 Outcome.Optimized when r.Detail != "" => $"OK      {rel}: {r.Detail}",
-                Outcome.Optimized => $"OK      {rel}: {r.FileBefore / 1024.0:F0} -> {r.FileAfter / 1024.0:F0} KB, embedded {r.EmbedBefore / 1024.0:F0} -> {r.EmbedAfter / 1024.0:F0} KB, max shift {r.PosErr * 1000:F2} mm",
+                Outcome.Optimized => $"OK      {rel}: {r.FileBefore / 1024.0:F0} -> {r.FileAfter / 1024.0:F0} KB, embedded {r.EmbedBefore / 1024.0:F0} -> {r.EmbedAfter / 1024.0:F0} KB, max shift {r.PosErr * 1000:F2} mm{(r.Protected > 0 ? $", {r.Protected} driving-edge vertices kept exact" : "")}",
                 Outcome.Problem => $"PROBLEM {rel}: {r.Detail} (copied unchanged)",
                 _ => $"SKIP    {rel}: {r.Detail}",
             });
@@ -316,12 +351,16 @@ if (groups.Count == 1) rows.RemoveRange(1, rows.Count - 2);              // sing
 var table = MdTable(rows);
 var already = opt.Count(r => r.Detail == "already slim");
 var countsLine = $"{opt.Count - already} optimized, {already} already slim, {skipped} skipped (not static mesh items), {problems} failed verification (copied unchanged).";
+var vertsAll = opt.Sum(r => (long)r.Vertices);
+var protAll = opt.Sum(r => (long)r.Protected);
+var protLine = $"Driving-surface edges at block boundaries kept exact: {protAll} vertices in {opt.Count(r => r.Protected > 0)} items ({(vertsAll == 0 ? 0 : 100.0 * protAll / vertsAll).ToString("F1", inv)}% of all vertices).";
 var savedLine = $"Saved {Mb(F0 - F1)} {unit} item file size ({Pct(F0, F1)}), {Mb(E0 - E1)} {unit} embedded ({Pct(E0, E1)}), max vertex shift {opt.DefaultIfEmpty().Max(r => r?.PosErr ?? 0) * 1000:F2} mm, {sw.Elapsed.TotalSeconds:F0} s.";
 Console.WriteLine();
 table.ForEach(Console.WriteLine);
 Console.WriteLine();
 Console.WriteLine(countsLine);
 Console.WriteLine(savedLine);
+Console.WriteLine(protLine);
 mapLines.ForEach(Console.WriteLine);
 foreach (var (title, t, notes) in mapTables)
 {
@@ -347,7 +386,7 @@ if (dryRun) Console.WriteLine("Dry run: no items were written.");
         "", "## Summary", "",
     };
     md.AddRange(table);
-    md.AddRange(["", countsLine, "", savedLine]);
+    md.AddRange(["", countsLine, "", savedLine, "", protLine]);
     foreach (var l in mapLines) md.AddRange(["", l]);
     foreach (var (title, t, notes) in mapTables)
     {
@@ -373,17 +412,38 @@ if (dryRun) Console.WriteLine("Dry run: no items were written.");
         md.AddRange(MdTable([["Item", "Reason"], .. skip.Select(r => new[] { Cell(r.RelPath), Cell(r.Detail) })]));
     }
     md.AddRange(["", "## Items", ""]);
-    md.AddRange(MdTable([["Item", "Files KB", "Files %", "Embedded KB", "Embedded %", "Max shift mm", "Vertices"],
+    var imgOf = new Dictionary<ItemResult, string>(ReferenceEqualityComparer.Instance);
+    for (var i = 0; i < work.Count; i++) imgOf[results[i]] = work[i].Img;
+    string View(ItemResult r) => $"[view](<{Path.GetRelativePath(Path.GetDirectoryName(reportPath)!, Path.Combine(protectionDir, imgOf[r])).Replace('\\', '/')}>)";
+    string[] head = ["Item", "Files KB", "Files %", "Embedded KB", "Embedded %", "Max shift mm", "Vertices", "Edge kept"];
+    md.AddRange(MdTable([showProtection ? [.. head, "Protection"] : head,
         .. opt.Select(r => new[] { Cell(r.RelPath) + (r.Detail == "already slim" ? " (already slim)" : ""),
             $"{Kb(r.FileBefore)} → {Kb(r.FileAfter)}", Pct(r.FileBefore, r.FileAfter),
             $"{Kb(r.EmbedBefore)} → {Kb(r.EmbedAfter)}", Pct(r.EmbedBefore, r.EmbedAfter),
-            (r.PosErr * 1000).ToString("F2", inv), r.Vertices.ToString() })]));
+            (r.PosErr * 1000).ToString("F2", inv), r.Vertices.ToString(), r.Protected.ToString() }
+            .Concat(showProtection ? [View(r)] : []).ToArray())]));
     Directory.CreateDirectory(Path.GetDirectoryName(reportPath)!);
     File.WriteAllLines(reportPath, md);
     Console.WriteLine($"Report: {reportPath}");
 }
+
+// protection images (Blender, after everything else is written: it takes a while for big packs)
+if (showProtection)
+{
+    var list = scenes.Where(x => x is not null).Select(x => x!).ToList();
+    Console.WriteLine($"Rendering the protected edges of {list.Count} items with {blender} ...");
+    var rsw = System.Diagnostics.Stopwatch.StartNew();
+    var n = list.Count == 0 ? 0 : ProtectionView.Render(blender!, list, sceneDir, Console.WriteLine);
+    Console.WriteLine($"Protection images: {n} of {list.Count} in {protectionDir} ({rsw.Elapsed.TotalSeconds:F0} s)");
+    try { Directory.Delete(sceneDir, true); } catch { }
+    if (n < list.Count) problems++;
+}
 return problems > 0 ? 1 : 0;
 
+
+// protection image name for an item path: x.Item.Gbx -> x.png
+static string Png(string itemPath) =>
+    (itemPath.EndsWith(".Item.Gbx", StringComparison.OrdinalIgnoreCase) ? itemPath[..^".Item.Gbx".Length] : itemPath) + ".png";
 
 // <folder>_optimized next to a folder, <name>_optimized.Item.Gbx / .Map.Gbx next to a single item or map
 static string OutPath(string input)
