@@ -22,6 +22,9 @@ The files then compress far better. Typical results on [real item packs](https:/
 the item's decompressed content after deflate compression. It approximates how much the item adds to a map that
 uses it, and it is the number that matters for map size limits.
 
+### Border Clip Protection
+Vertices which are on the block border are never touched and are always exactly identical to the original item. you can visualize which vertices are affected with the `--show-protection` flag which renders screenshots of the blocks out but it requires a correct blender install :>
+
 
 ## Usage
 
@@ -57,6 +60,7 @@ first.
 |---|---|
 | `--dry-run` | Only measure what would be gained; no items are written. |
 | `--quiet` | Summary only, no line per item. |
+| `--show-protection "path/to/blender"` | detects your Blender installation and renders screenshots of the blocks and their protection vertices in red. optionally also takes a string with the path to your blender installation if it could not be detected automatically. | 
 
 ## Report
 Every run, including a dry run, also writes a Markdown report, `<name>_ItemSlim.md`, next to the first input.
