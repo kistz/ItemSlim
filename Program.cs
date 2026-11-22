@@ -116,7 +116,7 @@ foreach (var input in inputs)
             var inMap = cut >= 0 ? norm[(cut + 7)..] : norm;
             var shown = mapName + ": " + inMap;
             work.Add((() => bytes, shown, mapName, (b, r) => { job.NewBytes[name] = MapJob.UncompressedBody(b); job.Outcomes[name] = r.Outcome; },
-                      Png(Path.Combine(mapName[..^".Map.Gbx".Length], inMap))));
+                      Png(inputs.Count > 1 ? Path.Combine(mapName[..^".Map.Gbx".Length], inMap) : inMap)));      // map-name folder only to tell several inputs apart
         }
         Console.WriteLine($"Map {mapName}: {itemEntries.Count} embedded items ({job.Entries.Count} embedded files)");
         continue;
@@ -188,7 +188,8 @@ Parallel.For(0, work.Count, new ParallelOptions { MaxDegreeOfParallelism = Envir
         if (showProtection && r.Outcome != Outcome.Skipped)
         {
             var scene = Path.Combine(sceneDir, $"{i}.json");
-            ProtectionView.WriteScene(bytes, rel, scene, Path.Combine(protectionDir, img));
+            // Blender renders to a short temp name (Windows' 260-character limit); the file is moved into place afterwards
+            ProtectionView.WriteScene(bytes, rel, scene, Path.ChangeExtension(scene, ".png"));
             scenes[i] = scene;
         }
     }
@@ -433,7 +434,22 @@ if (showProtection)
     var list = scenes.Where(x => x is not null).Select(x => x!).ToList();
     Console.WriteLine($"Rendering the protected edges of {list.Count} items with {blender} ...");
     var rsw = System.Diagnostics.Stopwatch.StartNew();
-    var n = list.Count == 0 ? 0 : ProtectionView.Render(blender!, list, sceneDir, Console.WriteLine);
+    if (list.Count > 0) ProtectionView.Render(blender!, list, sceneDir, Console.WriteLine);
+    var n = 0;
+    for (var i = 0; i < work.Count; i++)
+    {
+        if (scenes[i] is not { } sc) continue;
+        var tmp = Path.ChangeExtension(sc, ".png");
+        if (!File.Exists(tmp)) continue;
+        try
+        {
+            var final = Path.Combine(protectionDir, work[i].Img);
+            Directory.CreateDirectory(Path.GetDirectoryName(final)!);
+            File.Move(tmp, final, true);
+            n++;
+        }
+        catch (Exception ex) { Console.WriteLine($"  could not save image for {work[i].Rel}: {ex.Message}"); }
+    }
     Console.WriteLine($"Protection images: {n} of {list.Count} in {protectionDir} ({rsw.Elapsed.TotalSeconds:F0} s)");
     try { Directory.Delete(sceneDir, true); } catch { }
     if (n < list.Count) problems++;
