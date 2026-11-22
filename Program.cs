@@ -9,6 +9,7 @@ using ItemSlim;
 Gbx.LZO = new Lzo();
 Console.OutputEncoding = System.Text.Encoding.UTF8;
 var inv = CultureInfo.InvariantCulture;
+static string Paint(string t, int code) => Console.IsOutputRedirected ? t : $"[{code}m{t}[0m";   // 31 red, 32 green; plain when redirected
 
 const string Usage = """
 ItemSlim - makes Trackmania 2020 items (.Item.Gbx) and the items embedded in maps smaller without visible change.
@@ -31,7 +32,6 @@ the map stays as it is.
 
 Options:
   --dry-run           only measure what would be gained, write no items
-  --quiet             no per-item lines, only the summary
   --show-protection [blender]
                       also render every item with its protected driving-surface edges in red, as PNGs in
                       <name>_protection next to the report. Needs Blender: found automatically (PATH, the usual
@@ -42,10 +42,11 @@ as <name>_ItemSlim.md.
 Items that are not static mesh items (Mesh Modeler items, prefabs, variant lists) are skipped and copied as they are.
 Exit code: 0 = ok, 1 = some items failed verification (copied unchanged), 2 = bad arguments.
 """;
+const int FewProtected = 4;                                  // --show-protection lists items below this many protected vertices
 const double PosStep = 1.0 / 1024, UvStep = 1.0 / 16384;     // 0.98 mm position grid, 1/16384 UV grid
 
 var inputs = new List<string>();
-bool dryRun = false, quiet = false, showProtection = false;
+bool dryRun = false, showProtection = false;
 string? blender = null;
 try
 {
@@ -55,7 +56,6 @@ try
         {
             case "-h": case "--help": case "/?": Console.WriteLine(Usage); return 0;
             case "--dry-run": dryRun = true; break;
-            case "--quiet": quiet = true; break;
             case "--show-protection":
                 showProtection = true;
                 // optional Blender path: an existing executable / install folder, or anything named blender*
@@ -201,27 +201,20 @@ Parallel.For(0, work.Count, new ParallelOptions { MaxDegreeOfParallelism = Envir
     lock (gate)
     {
         done++;
-        if (!quiet)
-            Console.WriteLine(r.Outcome switch
-            {
-                Outcome.Optimized when r.Detail != "" => $"OK      {rel}: {r.Detail}",
-                Outcome.Optimized => $"OK      {rel}: {r.FileBefore / 1024.0:F0} -> {r.FileAfter / 1024.0:F0} KB, embedded {r.EmbedBefore / 1024.0:F0} -> {r.EmbedAfter / 1024.0:F0} KB, max shift {r.PosErr * 1000:F2} mm{(r.Protected > 0 ? $", {r.Protected} driving-edge vertices kept exact" : "")}",
-                Outcome.Problem => $"PROBLEM {rel}: {r.Detail} (copied unchanged)",
-                _ => $"SKIP    {rel}: {r.Detail}",
-            });
-        else if (done % 1000 == 0) Console.WriteLine($"  {done}/{work.Count} ...");
+        if (done % 1000 == 0) Console.WriteLine($"  {done}/{work.Count} ...");
     }
 });
 
 // maps: put the optimized items back into the embedded zip (same order, names and dates), build the new map in
 // memory, verify it, then write it (not on a dry run)
 var mapLines = new List<string>();
+var finalLines = new List<string>();                       // printed last, after the report line
 var mapTables = new List<(string Title, List<string> Table, List<string> Notes)>();
 foreach (var job in maps)
 {
     var mapFile = Path.GetFileName(job.Path);
     var before = new FileInfo(job.Path).Length;
-    if (job.Entries.Count == 0) { mapLines.Add($"Map {mapFile}: no embedded items, nothing to do"); continue; }
+    if (job.Entries.Count == 0) { mapLines.Add($"Map {mapFile}: no embedded items, nothing to do"); finalLines.Add($"{mapFile}: no embedded items, nothing to do"); continue; }
     var expected = job.Entries.Select(e => (e.Name, Bytes: job.NewBytes.TryGetValue(e.Name, out var nb) ? nb : e.Bytes)).ToList();
     // only the entries that changed are replaced; every other entry keeps its original compressed bytes and the
     // order stays (so the map's embedded-item list keeps its order too)
@@ -266,6 +259,7 @@ foreach (var job in maps)
     if (bad > 0)
     {
         mapLines.Add($"Map {mapFile}: PROBLEM - {bad} embedded files did not read back correctly, map not saved");
+        finalLines.Add(Paint($"{mapFile}: PROBLEM - {bad} embedded files did not read back correctly, map not saved", 31));
         mapProblems++;
         continue;
     }
@@ -292,6 +286,21 @@ foreach (var job in maps)
         mapData = bareBytes.Length;
     }
     catch { }
+    // lightmap and thumbnail inside the map data, each measured by saving the bare map without it
+    long Without(Action<CGameCtnChallenge> remove)
+    {
+        try
+        {
+            var m = Gbx.Parse<CGameCtnChallenge>(new MemoryStream(newMap.ToArray()));
+            m.Node.EmbeddedZipData = [];
+            remove(m.Node);
+            using var ms2 = new MemoryStream(); m.Save(ms2);
+            return Math.Max(0, mapData - ms2.Length);
+        }
+        catch { return 0; }
+    }
+    var lightmap = mapData >= 0 ? Without(n => { n.HasLightmaps = false; n.LightmapCache = null; n.LightmapFrames = null; n.LightmapCacheData = null; }) : 0;
+    var thumbnail = mapData >= 0 ? Without(n => n.Thumbnail = null) : 0;
     var crows = new List<string[]> { new[] { "Part", "Count", "Before KB", "After KB", "Change" } };
     if (mapData >= 0)
         crows.Add(["Embedded items and files", job.Entries.Count.ToString(), K(before - mapData), K(after - mapData), P(before - mapData, after - mapData)]);
@@ -303,26 +312,20 @@ foreach (var job in maps)
         crows.Add([(mapData >= 0 ? "↳ " : "") + label, es.Count.ToString(), K(b0), K(b1), P(b0, b1)]);
     }
     if (mapData >= 0)
-        crows.Add(["Map data (blocks, placed items, lightmap, thumbnail, ...)", "", K(mapData), K(mapData), "0%"]);
-    crows.Add(["**Map file**", "", K(before), K(after), P(before, after)]);
-    // what is in the map data that ItemSlim leaves alone
-    var lightmap = 0L;
-    try
     {
-        var noLm = Gbx.Parse<CGameCtnChallenge>(new MemoryStream(newMap.ToArray()));
-        noLm.Node.HasLightmaps = false; noLm.Node.LightmapCache = null; noLm.Node.LightmapFrames = null; noLm.Node.LightmapCacheData = null;
-        using var noLmBytes = new MemoryStream(); noLm.Save(noLmBytes);
-        lightmap = Math.Max(0, after - noLmBytes.Length);
+        crows.Add(["Map data", "", K(mapData), K(mapData), "0%"]);
+        crows.Add(["↳ Lightmap (baked shadows)", "", K(lightmap), K(lightmap), "0%"]);
+        crows.Add(["↳ Thumbnail", "", K(thumbnail), K(thumbnail), "0%"]);
+        crows.Add(["↳ Blocks, placed items, other", "", K(mapData - lightmap - thumbnail), K(mapData - lightmap - thumbnail), "0%"]);
     }
-    catch { }
+    crows.Add(["**Map file**", "", K(before), K(after), P(before, after)]);
     var notes = new List<string>
     {
-        $"Lightmap (baked shadows) in the map data: {K(lightmap)} KB, {P(after, after - lightmap).TrimStart('−')} of the map. Kept: removing it changes the lighting until the map is recalculated in the editor.",
-        $"Thumbnail: {K(check.Node.Thumbnail?.Length ?? 0)} KB, kept.",
-        "The ↳ rows are the compressed sizes inside the map's embedded archive; the map file compresses that archive once more, so they add up to the embedded total only approximately.",
+        "The ↳ rows under embedded items are the compressed sizes inside the map's embedded archive; the map file compresses that archive once more, so they add up to the embedded total only approximately.",
     };
     mapTables.Add(($"Map {mapFile}", MdTable(crows), notes));
     mapLines.Add($"Map {mapFile}: {before / 1024.0:F0} KB → {after / 1024.0:F0} KB ({P(before, after)}), {(dryRun ? "dry run, not saved" : $"saved as {Path.GetFileName(outMap)}")}{(sameOrder ? "" : " (embedded file order changed)")}");
+    finalLines.Add(Paint($"{(dryRun ? mapFile + " (dry run)" : Path.GetFileName(outMap))}: {before / 1024.0:F0} KB → {after / 1024.0:F0} KB ({P(before, after)})", 32));
 }
 
 // summary
@@ -356,13 +359,34 @@ var vertsAll = opt.Sum(r => (long)r.Vertices);
 var protAll = opt.Sum(r => (long)r.Protected);
 var protLine = $"Driving-surface edges at block boundaries kept exact: {protAll} vertices in {opt.Count(r => r.Protected > 0)} items ({(vertsAll == 0 ? 0 : 100.0 * protAll / vertsAll).ToString("F1", inv)}% of all vertices).";
 var savedLine = $"Saved {Mb(F0 - F1)} {unit} item file size ({Pct(F0, F1)}), {Mb(E0 - E1)} {unit} embedded ({Pct(E0, E1)}), max vertex shift {opt.DefaultIfEmpty().Max(r => r?.PosErr ?? 0) * 1000:F2} mm, {sw.Elapsed.TotalSeconds:F0} s.";
+// items with no or hardly any protected vertices: either not roads (fine) or roads whose ends don't sit on a
+// 16 m boundary within 10 mm, which is worth a look. Shown first, in red, and at the top of the report.
+string Cell(string t) => t.Replace("|", "\\|");
+var imgOf = new Dictionary<ItemResult, string>(ReferenceEqualityComparer.Instance);
+for (var i = 0; i < work.Count; i++) imgOf[results[i]] = work[i].Img;
+string View(ItemResult r) => $"[view](<{Path.GetRelativePath(Path.GetDirectoryName(reportPath)!, Path.Combine(protectionDir, imgOf[r])).Replace('\\', '/')}>)";
+var few = opt.Where(r => r.Protected < FewProtected).OrderBy(r => r.Protected).ThenBy(r => r.RelPath, StringComparer.OrdinalIgnoreCase).ToList();
+string ItemName(string rel) { var n = rel[(rel.LastIndexOfAny(['\\', '/']) + 1)..]; return n.EndsWith(".Item.Gbx", StringComparison.OrdinalIgnoreCase) ? n[..^9] : n; }
+var checkMd = new List<string>
+{
+    "", $"## Items to check in the red table above: fewer than {FewProtected} protected vertices ({few.Count})", "",
+    "No driving-surface edge was found on a block boundary for these. Fine for decorations; for a road piece it means its ends are not within 10 mm of a 16 m boundary, so it is not protected against clipping.", "",
+};
+if (few.Count > 0)
+    checkMd.AddRange(MdTable([showProtection ? ["Item", "Path", "Vertices", "Edge kept", "Protection"] : ["Item", "Path", "Vertices", "Edge kept"],
+        .. few.Select(r => new[] { Cell(ItemName(r.RelPath)), Cell(r.RelPath), r.Vertices.ToString(), r.Protected.ToString() }.Concat(showProtection ? [View(r)] : []).ToArray())]));
+void Red(string t) => Console.WriteLine(Paint(t, 31));
+var fewLine = Paint($"Items with fewer than {FewProtected} protected vertices: {few.Count} ({few.Count(r => r.Protected == 0)} with none){(showProtection ? ", listed in the report with images." : ", listed in the report. Run with --show-protection to see them.")}", 31);
+if (few.Count > 0)
+{
+    Console.WriteLine();
+    MdTable([["Item", "Vertices", "Edge kept"], .. few.Select(r => new[] { ItemName(r.RelPath), r.Vertices.ToString(), r.Protected.ToString() })]).ForEach(Red);
+}
 Console.WriteLine();
-table.ForEach(Console.WriteLine);
+table.ForEach(l => Console.WriteLine(System.Text.RegularExpressions.Regex.Replace(l, @"−\d+%", m => Paint(m.Value, 32))));      // reductions in green
 Console.WriteLine();
 Console.WriteLine(countsLine);
-Console.WriteLine(savedLine);
 Console.WriteLine(protLine);
-mapLines.ForEach(Console.WriteLine);
 foreach (var (title, t, notes) in mapTables)
 {
     Console.WriteLine();
@@ -375,7 +399,6 @@ if (dryRun) Console.WriteLine("Dry run: no items were written.");
 // Markdown report (always)
 {
     string Kb(long b) => (b / 1024.0).ToString("F1", inv);
-    string Cell(string t) => t.Replace("|", "\\|");
     var md = new List<string>
     {
         "# ItemSlim report", "",
@@ -384,8 +407,9 @@ if (dryRun) Console.WriteLine("Dry run: no items were written.");
         $"- Mode: {mode}",
         $"- Output: {(dryRun ? "none (dry run)" : string.Join(", ", inputs.Select(x => $"`{OutPath(x)}`")))}",
         $"- Grid: positions {PosStep * 1000:0.####} mm, UVs {UvStep:0.##########}",
-        "", "## Summary", "",
     };
+    md.AddRange(checkMd);
+    md.AddRange(["", "## Summary", ""]);
     md.AddRange(table);
     md.AddRange(["", countsLine, "", savedLine, "", protLine]);
     foreach (var l in mapLines) md.AddRange(["", l]);
@@ -413,9 +437,6 @@ if (dryRun) Console.WriteLine("Dry run: no items were written.");
         md.AddRange(MdTable([["Item", "Reason"], .. skip.Select(r => new[] { Cell(r.RelPath), Cell(r.Detail) })]));
     }
     md.AddRange(["", "## Items", ""]);
-    var imgOf = new Dictionary<ItemResult, string>(ReferenceEqualityComparer.Instance);
-    for (var i = 0; i < work.Count; i++) imgOf[results[i]] = work[i].Img;
-    string View(ItemResult r) => $"[view](<{Path.GetRelativePath(Path.GetDirectoryName(reportPath)!, Path.Combine(protectionDir, imgOf[r])).Replace('\\', '/')}>)";
     string[] head = ["Item", "Files KB", "Files %", "Embedded KB", "Embedded %", "Max shift mm", "Vertices", "Edge kept"];
     md.AddRange(MdTable([showProtection ? [.. head, "Protection"] : head,
         .. opt.Select(r => new[] { Cell(r.RelPath) + (r.Detail == "already slim" ? " (already slim)" : ""),
@@ -454,6 +475,10 @@ if (showProtection)
     try { Directory.Delete(sceneDir, true); } catch { }
     if (n < list.Count) problems++;
 }
+// last lines: items to check (red), then the maps (green)
+Console.WriteLine();
+Console.WriteLine(fewLine);
+finalLines.ForEach(Console.WriteLine);
 return problems > 0 ? 1 : 0;
 
 
