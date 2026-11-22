@@ -42,7 +42,7 @@ ItemSlim "C:\Users\me\Documents\Trackmania\Items\MySet"
 
 ### Linux
 ```
-tar -xzf ItemSlim-linux-x64.tar.gz
+gzip -t ItemSlim-0.4.0-linux-x64.tar.gz && tar -xzf ItemSlim-0.4.0-linux-x64.tar.gz
 ./ItemSlim ~/Trackmania/Items/MySet
 ```
 The `.tar.gz` archives keep the executable bit. If you copy the bare file instead, run `chmod +x ItemSlim` first.
@@ -59,7 +59,6 @@ first.
 | Option | Meaning |
 |---|---|
 | `--dry-run` | Only measure what would be gained; no items are written. |
-| `--quiet` | Summary only, no line per item. |
 | `--show-protection "path/to/blender"` | detects your Blender installation and renders screenshots of the blocks and their protection vertices in red. optionally also takes a string with the path to your blender installation if it could not be detected automatically. | 
 
 ## Report
