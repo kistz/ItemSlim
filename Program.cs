@@ -145,7 +145,16 @@ foreach (var input in inputs)
 if (work.Count == 0) { Console.WriteLine("no items found (no .Item.Gbx files and no items embedded in the maps)"); return 0; }
 
 var mapProblems = 0;
-var mode = dryRun ? "dry run (no items written)" : "writing <name>_optimized, input untouched";
+// already optimized and only the images are missing: with --show-protection, just render them (nothing is written
+// except the images, and the existing report is left alone)
+var renderOnly = showProtection && !dryRun && !Directory.Exists(protectionDir)
+                 && inputs.All(i => Directory.Exists(OutPath(i)) || File.Exists(OutPath(i)));
+if (renderOnly)
+{
+    dryRun = true;
+    Console.WriteLine("The _optimized output already exists: only rendering the protection images (nothing else is written).");
+}
+var mode = renderOnly ? "render protection images only (output already exists)" : dryRun ? "dry run (no items written)" : "writing <name>_optimized, input untouched";
 Console.WriteLine($"ItemSlim: {work.Count} items, {mode}, {Environment.ProcessorCount} threads");
 
 // outputs must not exist yet: never mix a new run with old files
@@ -369,14 +378,14 @@ var few = opt.Where(r => r.Protected < FewProtected).OrderBy(r => r.Protected).T
 string ItemName(string rel) { var n = rel[(rel.LastIndexOfAny(['\\', '/']) + 1)..]; return n.EndsWith(".Item.Gbx", StringComparison.OrdinalIgnoreCase) ? n[..^9] : n; }
 var checkMd = new List<string>
 {
-    "", $"## Items to check in the red table above: fewer than {FewProtected} protected vertices ({few.Count})", "",
+    "", $"## Items to check: fewer than {FewProtected} protected vertices ({few.Count})", "",
     "No driving-surface edge was found on a block boundary for these. Fine for decorations; for a road piece it means its ends are not within 10 mm of a 16 m boundary, so it is not protected against clipping.", "",
 };
 if (few.Count > 0)
     checkMd.AddRange(MdTable([showProtection ? ["Item", "Path", "Vertices", "Edge kept", "Protection"] : ["Item", "Path", "Vertices", "Edge kept"],
         .. few.Select(r => new[] { Cell(ItemName(r.RelPath)), Cell(r.RelPath), r.Vertices.ToString(), r.Protected.ToString() }.Concat(showProtection ? [View(r)] : []).ToArray())]));
 void Red(string t) => Console.WriteLine(Paint(t, 31));
-var fewLine = Paint($"Items with fewer than {FewProtected} protected vertices: {few.Count} ({few.Count(r => r.Protected == 0)} with none){(showProtection ? ", listed in the report with images." : ", listed in the report. Run with --show-protection to see them.")}", 31);
+var fewLine = Paint($"Items with fewer than {FewProtected} protected vertices: {few.Count} ({few.Count(r => r.Protected == 0)} with none){(renderOnly ? ", see the protection images." : showProtection ? ", listed in the report with images." : ", listed in the report. Run with --show-protection to see them.")}", 31);
 if (few.Count > 0)
 {
     Console.WriteLine();
@@ -394,7 +403,7 @@ foreach (var (title, t, notes) in mapTables)
     t.ForEach(Console.WriteLine);
     notes.ForEach(Console.WriteLine);
 }
-if (dryRun) Console.WriteLine("Dry run: no items were written.");
+if (dryRun && !renderOnly) Console.WriteLine("Dry run: no items were written.");
 
 // Markdown report (always)
 {
@@ -444,9 +453,12 @@ if (dryRun) Console.WriteLine("Dry run: no items were written.");
             $"{Kb(r.EmbedBefore)} → {Kb(r.EmbedAfter)}", Pct(r.EmbedBefore, r.EmbedAfter),
             (r.PosErr * 1000).ToString("F2", inv), r.Vertices.ToString(), r.Protected.ToString() }
             .Concat(showProtection ? [View(r)] : []).ToArray())]));
-    Directory.CreateDirectory(Path.GetDirectoryName(reportPath)!);
-    File.WriteAllLines(reportPath, md);
-    Console.WriteLine($"Report: {reportPath}");
+    if (!renderOnly)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(reportPath)!);
+        File.WriteAllLines(reportPath, md);
+        Console.WriteLine($"Report: {reportPath}");
+    }
 }
 
 // protection images (Blender, after everything else is written: it takes a while for big packs)
