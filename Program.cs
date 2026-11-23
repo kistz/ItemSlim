@@ -276,7 +276,7 @@ foreach (var job in maps)
     if (!dryRun) File.WriteAllBytes(outMap, newMap.ToArray());
 
     // composition: where the bytes are, before and after
-    string K(long b) => (b / 1024.0).ToString("F0", inv);
+    string K(long b) => (b / 1000.0).ToString("F0", inv);
     string P(long a, long b) => a == 0 ? "–" : (100.0 * (b - a) / a).ToString("F0", inv).Replace("-", "−") + "%";
     var isItem = (string n) => n.EndsWith(".Item.Gbx", StringComparison.OrdinalIgnoreCase);
     var parts = new (string Label, Func<string, bool> Match)[]
@@ -333,16 +333,16 @@ foreach (var job in maps)
         "The ↳ rows under embedded items are the compressed sizes inside the map's embedded archive; the map file compresses that archive once more, so they add up to the embedded total only approximately.",
     };
     mapTables.Add(($"Map {mapFile}", MdTable(crows), notes));
-    mapLines.Add($"Map {mapFile}: {before / 1024.0:F0} KB → {after / 1024.0:F0} KB ({P(before, after)}), {(dryRun ? "dry run, not saved" : $"saved as {Path.GetFileName(outMap)}")}{(sameOrder ? "" : " (embedded file order changed)")}");
-    finalLines.Add(Paint($"{(dryRun ? mapFile + " (dry run)" : Path.GetFileName(outMap))}: {before / 1024.0:F0} KB → {after / 1024.0:F0} KB ({P(before, after)})", 32));
+    mapLines.Add($"Map {mapFile}: {before / 1e6:F2} MB → {after / 1e6:F2} MB ({P(before, after)}), {(dryRun ? "dry run, not saved" : $"saved as {Path.GetFileName(outMap)}")}{(sameOrder ? "" : " (embedded file order changed)")}");
+    finalLines.Add(Paint($"{(dryRun ? mapFile + " (dry run)" : Path.GetFileName(outMap))}: {before / 1e6:F2} MB → {after / 1e6:F2} MB ({P(before, after)})", 32));
 }
 
 // summary
-var useKb = results.Where(r => r.Outcome == Outcome.Optimized).Sum(r => r.FileBefore) < 10L << 20;
+var useKb = results.Where(r => r.Outcome == Outcome.Optimized).Sum(r => r.FileBefore) < 10_000_000L;
 var unit = useKb ? "KB" : "MB";
 string Mb(long b)
 {
-    var t = useKb ? (b / 1024.0).ToString("F0", inv) : (b / 1048576.0).ToString("F1", inv);
+    var t = useKb ? (b / 1000.0).ToString("F0", inv) : (b / 1000000.0).ToString("F1", inv);
     return t is "-0" or "-0.0" ? t[1..] : t;                               // a few bytes more is still "0", not "-0.0"
 }
 string Pct(long a, long b) => a == 0 ? "–" : (100.0 * (b - a) / a).ToString("F0", inv).Replace("-", "−") + "%";
@@ -407,7 +407,7 @@ if (dryRun && !renderOnly) Console.WriteLine("Dry run: no items were written.");
 
 // Markdown report (always)
 {
-    string Kb(long b) => (b / 1024.0).ToString("F1", inv);
+    string Kb(long b) => (b / 1000.0).ToString("F1", inv);
     var md = new List<string>
     {
         "# ItemSlim report", "",
