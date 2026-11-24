@@ -251,8 +251,15 @@ foreach (var job in maps)
             });
         }
     }
+    // a new map UID (and the checksum that goes with it), as the editor's Save As does: Nadeo's servers know maps by
+    // UID, and a UID that was uploaded before with other content is refused
+    var oldUid = job.Gbx.Node.MapUid;
+    var newUid = job.Gbx.Node.GenerateMapUid();
+    job.Gbx.Node.ComputeCrc32();
+    if (job.Gbx.Node.Xml is { } xml)                                    // the header's XML names the UID too
+        job.Gbx.Node.Xml = xml.Replace($"uid=\"{oldUid}\"", $"uid=\"{newUid}\"");
     using var newMap = new MemoryStream();
-    job.Gbx.Save(newMap);
+    job.Gbx.Save(newMap);                                               // the map keeps GBX.NET's signature; only the items lose it
     var after = newMap.Length;
 
     // verify from the saved bytes: every embedded file exactly as intended
@@ -333,7 +340,7 @@ foreach (var job in maps)
         "The ↳ rows under embedded items are the compressed sizes inside the map's embedded archive; the map file compresses that archive once more, so they add up to the embedded total only approximately.",
     };
     mapTables.Add(($"Map {mapFile}", MdTable(crows), notes));
-    mapLines.Add($"Map {mapFile}: {before / 1e6:F2} MB → {after / 1e6:F2} MB ({P(before, after)}), {(dryRun ? "dry run, not saved" : $"saved as {Path.GetFileName(outMap)}")}{(sameOrder ? "" : " (embedded file order changed)")}");
+    mapLines.Add($"Map {mapFile}: {before / 1e6:F2} MB → {after / 1e6:F2} MB ({P(before, after)}), {(dryRun ? "dry run, not saved" : $"saved as {Path.GetFileName(outMap)}")}{(sameOrder ? "" : " (embedded file order changed)")}, new map UID `{newUid}` (was `{oldUid}`)");
     finalLines.Add(Paint($"{(dryRun ? mapFile + " (dry run)" : Path.GetFileName(outMap))}: {before / 1e6:F2} MB → {after / 1e6:F2} MB ({P(before, after)})", 32));
 }
 
@@ -362,7 +369,7 @@ var problems = results.Count(r => r.Outcome == Outcome.Problem) + mapProblems;
 rows.Add(["**Total**", opt.Count.ToString(), (skipped + problems).ToString(), $"{Mb(F0)} → {Mb(F1)}", Pct(F0, F1), $"{Mb(E0)} → {Mb(E1)}", Pct(E0, E1)]);
 if (groups.Count == 1) rows.RemoveRange(1, rows.Count - 2);              // single folder: only the total row
 var table = MdTable(rows);
-var already = opt.Count(r => r.Detail == "already slim");
+var already = opt.Count(r => r.Detail.StartsWith("already slim"));
 var countsLine = $"{opt.Count - already} optimized, {already} already slim, {skipped} skipped (not static mesh items), {problems} failed verification (copied unchanged).";
 var vertsAll = opt.Sum(r => (long)r.Vertices);
 var protAll = opt.Sum(r => (long)r.Protected);
@@ -448,7 +455,7 @@ if (dryRun && !renderOnly) Console.WriteLine("Dry run: no items were written.");
     md.AddRange(["", "## Items", ""]);
     string[] head = ["Item", "Files KB", "Files %", "Embedded KB", "Embedded %", "Max shift mm", "Vertices", "Edge kept"];
     md.AddRange(MdTable([showProtection ? [.. head, "Protection"] : head,
-        .. opt.Select(r => new[] { Cell(r.RelPath) + (r.Detail == "already slim" ? " (already slim)" : ""),
+        .. opt.Select(r => new[] { Cell(r.RelPath) + (r.Detail.StartsWith("already slim") ? $" ({r.Detail})" : ""),
             $"{Kb(r.FileBefore)} → {Kb(r.FileAfter)}", Pct(r.FileBefore, r.FileAfter),
             $"{Kb(r.EmbedBefore)} → {Kb(r.EmbedAfter)}", Pct(r.EmbedBefore, r.EmbedAfter),
             (r.PosErr * 1000).ToString("F2", inv), r.Vertices.ToString(), r.Protected.ToString() }

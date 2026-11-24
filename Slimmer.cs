@@ -153,7 +153,7 @@ public static class Slimmer
             }
             using var ms = new MemoryStream();
             gbx.Save(ms);
-            var output = ms.ToArray();
+            var output = SignatureChunk.Strip(ms.ToArray());               // as the game writes it (see SignatureChunk)
             var after = Measure(output);
 
             // verify: re-read the written bytes and compare with the original vertex by vertex
@@ -199,7 +199,12 @@ public static class Slimmer
 
             var prot = keep.Sum(x => x.Count);
             if (problems.Count == 0 && pe == 0 && ue == 0)      // already on the grid: nothing to gain, keep the file as is
-                return new ItemResult(relPath, Outcome.Optimized, "already slim", before.File, before.File, before.Embed, before.Embed, 0, 0, verts, prot, null);
+            {
+                var clean = SignatureChunk.Strip(original);    // except a GBX.NET signature (from an earlier ItemSlim)
+                return ReferenceEquals(clean, original)
+                    ? new ItemResult(relPath, Outcome.Optimized, "already slim", before.File, before.File, before.Embed, before.Embed, 0, 0, verts, prot, null)
+                    : new ItemResult(relPath, Outcome.Optimized, "already slim, signature removed", before.File, clean.Length, before.Embed, Measure(clean).Embed, 0, 0, verts, prot, clean);
+            }
             return problems.Count == 0
                 ? new ItemResult(relPath, Outcome.Optimized, "", before.File, after.File, before.Embed, after.Embed, pe, ue, verts, prot, output)
                 : new ItemResult(relPath, Outcome.Problem, string.Join("; ", problems), before.File, before.File, before.Embed, before.Embed, pe, ue, verts, prot, null);
